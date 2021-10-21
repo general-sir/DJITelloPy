@@ -11,11 +11,26 @@ from typing import Optional, Union, Type, Dict
 import cv2 # type: ignore
 from .enforce_types import enforce_types
 
+import winwifi
+import subprocess
+import vlc
 
 threads_initialized = False
 drones: Optional[dict] = {}
 client_socket: socket.socket
 
+
+def get_tello_wifi():
+    network_information = str(subprocess.check_output(["netsh", "wlan", "show", "network"]))
+    network_information = network_information.replace('\\r', '')
+    network_information = network_information.replace("b' ", '')
+    network_information = network_information.replace(":", '\n')
+    network_information = network_information.replace("\\n", '\n')
+    for line in network_information.split():
+        if "TELLO" in line:
+            return line.strip()
+    winwifi.WinWiFi.scan()
+    return None
 
 @enforce_types
 class Tello:
@@ -96,6 +111,7 @@ class Tello:
 
         global threads_initialized, client_socket, drones
 
+        self.connect_wifi()
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.stream_on = False
         self.retry_count = retry_count
@@ -121,6 +137,27 @@ class Tello:
 
         self.LOGGER.info("Tello instance was initialized. Host: '{}'. Port: '{}'.".format(host, Tello.CONTROL_UDP_PORT))
 
+    def connect_wifi(self):
+        if not winwifi.WinWiFi.get_connected_interfaces() or "TELLO" not in winwifi.WinWiFi.get_connected_interfaces()[
+            0].ssid:
+            attempt_count = 20
+            found_drone = False
+            for index, attempt in enumerate(range(attempt_count)):
+                wifi_address = get_tello_wifi()
+                if wifi_address is not None:
+                    found_drone = True
+                    if index > 0:
+                        print()
+                    print("Connecting to WiFi address {}".format(wifi_address))
+                    break
+                print(index, end="")
+                time.sleep(1)
+            if found_drone:
+                winwifi.WinWiFi.connect(wifi_address)
+                try:
+                    winwifi.WinWiFi.connect(wifi_address)
+                except RuntimeError:
+                    pass
     def get_own_udp_object(self):
         """Get own object from the global drones dict. This object is filled
         with responses and state information by the receiver threads.
@@ -433,6 +470,8 @@ class Tello:
         if diff < self.TIME_BTW_COMMANDS:
             self.LOGGER.debug('Waiting {} seconds to execute command: {}...'.format(diff, command))
             time.sleep(diff)
+        if command == "takeoff":
+            self.takeoff_delay()
 
         self.LOGGER.info("Send command: '{}'".format(command))
         timestamp = time.time()
@@ -1014,6 +1053,14 @@ class Tello:
         host = self.address[0]
         if host in drones:
             del drones[host]
+
+    def takeoff_delay(self):
+        p = vlc.MediaPlayer("C:/bin/DJITelloPy/djitellopy/chimes.wav")
+        p.play()
+        time.sleep(2)
+        p = vlc.MediaPlayer("C:/bin/DJITelloPy/djitellopy/chimes.wav")
+        p.play()
+        time.sleep(2)
 
     def __del__(self):
         self.end()
